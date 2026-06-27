@@ -8,7 +8,7 @@ export default function AppTabs() {
   const { user, logout } = useApp();
   
   if (!user) return null;
-  const isManager = user.role === 'sube-muduru' || user.role === 'genel-mudur';
+  const isManager = user.role === 'sube-muduru' || user.role === 'genel-mudur' || user.role === 'bireysel';
 
   return (
     <Tabs screenOptions={{

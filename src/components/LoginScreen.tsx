@@ -14,14 +14,21 @@ import { Spacing } from '@/constants/theme';
 import { ThemedText } from './themed-text';
 import { ThemedView } from './themed-view';
 import { useApp } from '../AppContext';
-import { LogIn, Mail, Lock } from 'lucide-react-native';
+import { LogIn, Mail, Lock, User, Briefcase, UserPlus } from 'lucide-react-native';
+import { auth, db } from '../firebase';
+import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { doc, setDoc } from 'firebase/firestore';
 
 const { width } = Dimensions.get('window');
 
 export function LoginScreen() {
   const { login } = useApp();
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [accountType, setAccountType] = useState<'business' | 'individual'>('individual');
+  const [businessName, setBusinessName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -48,6 +55,114 @@ export function LoginScreen() {
     }
   };
 
+  const handleRegister = async () => {
+    if (!email || !password || !name) {
+      setError('Lütfen tüm alanları doldurunuz.');
+      return;
+    }
+    if (accountType === 'business' && !businessName) {
+      setError('Lütfen işletme adını giriniz.');
+      return;
+    }
+    setError(null);
+    setLoading(true);
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const uid = userCredential.user.uid;
+
+      if (accountType === 'business') {
+        const branchId = 'sube-' + Math.random().toString(36).substring(2, 9);
+        await setDoc(doc(db, 'branches', branchId), {
+          subeId: branchId,
+          adi: businessName
+        });
+
+        await setDoc(doc(db, 'users', uid), {
+          personelId: uid,
+          uid: uid,
+          subeId: branchId,
+          adi: name,
+          rol: 'genel-mudur',
+          tanimlananSaat: 8,
+          email: email.trim().toLowerCase(),
+          aktif: true
+        });
+      } else {
+        await setDoc(doc(db, 'users', uid), {
+          personelId: uid,
+          uid: uid,
+          subeId: 'bireysel-sube',
+          adi: name,
+          rol: 'bireysel',
+          tanimlananSaat: 8,
+          email: email.trim().toLowerCase(),
+          aktif: true
+        });
+      }
+
+      alert('Kayıt başarıyla tamamlandı!');
+      await login(email.trim(), password);
+    } catch (err: any) {
+      console.error(err);
+      if (err.code === 'auth/email-already-in-use') {
+        setError('Bu e-posta adresi zaten kullanımda.');
+      } else if (err.code === 'auth/weak-password') {
+        setError('Şifre en az 6 karakter olmalıdır.');
+      } else {
+        setError('Kayıt oluşturulurken bir hata oluştu: ' + err.message);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDevSeed = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const email = 'pouriya798@gmail.com';
+      const password = 'password123';
+      
+      let userCredential;
+      try {
+        userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      } catch (err: any) {
+        if (err.code === 'auth/email-already-in-use') {
+          const { signInWithEmailAndPassword } = await import('firebase/auth');
+          userCredential = await signInWithEmailAndPassword(auth, email, password);
+        } else {
+          throw err;
+        }
+      }
+      
+      const uid = userCredential.user.uid;
+      
+      await setDoc(doc(db, 'branches', 'sube-1'), {
+        subeId: 'sube-1',
+        adi: 'Merkez Şube'
+      });
+      
+      await setDoc(doc(db, 'users', uid), {
+        personelId: uid,
+        uid: uid,
+        subeId: 'sube-1',
+        adi: 'Pouriya',
+        rol: 'genel-mudur',
+        tanimlananSaat: 8,
+        email: email,
+        aktif: true
+      });
+      
+      alert('Geliştirici veri tabanı başarıyla kuruldu! Otomatik giriş yapılıyor...');
+      await login(email, password);
+    } catch (err: any) {
+      console.error(err);
+      setError('Veri tabanı kurulumu başarısız: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -62,13 +177,71 @@ export function LoginScreen() {
             source={{ uri: 'https://picsum.photos/seed/restaurant/200/200' }}
             style={styles.logo}
           />
-          <ThemedText type="title" style={styles.title}>RedManger</ThemedText>
+          <ThemedText type="title" style={styles.title}>NpManger</ThemedText>
           <ThemedText style={styles.subtitle}>Vardiya ve Shift Takip Sistemi</ThemedText>
         </View>
 
         {error && (
           <View style={styles.errorBox}>
             <ThemedText style={styles.errorText}>{error}</ThemedText>
+          </View>
+        )}
+
+        {isRegistering && (
+          <View style={styles.inputContainer}>
+            <User size={20} color="#888" style={styles.inputIcon} />
+            <TextInput
+              placeholder="Ad Soyad"
+              placeholderTextColor="#888"
+              value={name}
+              onChangeText={setName}
+              style={styles.input}
+            />
+          </View>
+        )}
+
+        {isRegistering && (
+          <View style={styles.typeSelectorContainer}>
+            <TouchableOpacity
+              onPress={() => setAccountType('individual')}
+              style={[
+                styles.typeOption,
+                accountType === 'individual' && styles.typeOptionActive,
+              ]}
+            >
+              <User size={18} color={accountType === 'individual' ? '#6366F1' : '#94A3B8'} style={{ marginRight: 6 }} />
+              <ThemedText style={[
+                styles.typeText,
+                accountType === 'individual' && styles.typeTextActive
+              ]}>Bireysel</ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => setAccountType('business')}
+              style={[
+                styles.typeOption,
+                accountType === 'business' && styles.typeOptionActive,
+              ]}
+            >
+              <Briefcase size={18} color={accountType === 'business' ? '#6366F1' : '#94A3B8'} style={{ marginRight: 6 }} />
+              <ThemedText style={[
+                styles.typeText,
+                accountType === 'business' && styles.typeTextActive
+              ]}>İşletme</ThemedText>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {isRegistering && accountType === 'business' && (
+          <View style={styles.inputContainer}>
+            <Briefcase size={20} color="#888" style={styles.inputIcon} />
+            <TextInput
+              placeholder="İşletme / Restoran Adı"
+              placeholderTextColor="#888"
+              value={businessName}
+              onChangeText={setBusinessName}
+              style={styles.input}
+            />
           </View>
         )}
 
@@ -99,7 +272,7 @@ export function LoginScreen() {
         </View>
 
         <TouchableOpacity
-          onPress={handleLogin}
+          onPress={isRegistering ? handleRegister : handleLogin}
           disabled={loading}
           style={[styles.button, loading && styles.buttonDisabled]}
         >
@@ -107,11 +280,42 @@ export function LoginScreen() {
             <ActivityIndicator color="#fff" />
           ) : (
             <View style={styles.buttonInner}>
-              <LogIn size={20} color="#fff" style={{ marginRight: 8 }} />
-              <ThemedText style={styles.buttonText}>Giriş Yap</ThemedText>
+              {isRegistering ? (
+                <>
+                  <UserPlus size={20} color="#fff" style={{ marginRight: 8 }} />
+                  <ThemedText style={styles.buttonText}>Kayıt Ol</ThemedText>
+                </>
+              ) : (
+                <>
+                  <LogIn size={20} color="#fff" style={{ marginRight: 8 }} />
+                  <ThemedText style={styles.buttonText}>Giriş Yap</ThemedText>
+                </>
+              )}
             </View>
           )}
         </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={() => {
+            setIsRegistering(!isRegistering);
+            setError(null);
+          }}
+          style={styles.toggleButton}
+        >
+          <ThemedText style={styles.toggleButtonText}>
+            {isRegistering ? 'Zaten bir hesabınız var mı? Giriş yapın' : 'Hesabınız yok mu? Kayıt olun'}
+          </ThemedText>
+        </TouchableOpacity>
+
+        {__DEV__ && (
+          <TouchableOpacity
+            onPress={handleDevSeed}
+            disabled={loading}
+            style={[styles.seedButton, { marginTop: 12 }]}
+          >
+            <ThemedText style={styles.seedButtonText}>Geliştirici Datanı Kur (Seed)</ThemedText>
+          </TouchableOpacity>
+        )}
       </ThemedView>
     </KeyboardAvoidingView>
   );
@@ -236,5 +440,59 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  seedButton: {
+    borderWidth: 1,
+    borderColor: 'rgba(99, 102, 241, 0.4)',
+    borderRadius: 14,
+    height: 52,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(99, 102, 241, 0.1)',
+  },
+  seedButtonText: {
+    color: '#818CF8',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  toggleButton: {
+    marginTop: Spacing.four,
+    alignItems: 'center',
+    paddingVertical: Spacing.two,
+  },
+  toggleButtonText: {
+    color: '#94A3B8',
+    fontSize: 14,
+    fontWeight: '500',
+    textDecorationLine: 'underline',
+  },
+  typeSelectorContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.four,
+  },
+  typeOption: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: 'rgba(15, 23, 42, 0.3)',
+    marginHorizontal: Spacing.one,
+  },
+  typeOptionActive: {
+    borderColor: '#6366F1',
+    backgroundColor: 'rgba(99, 102, 241, 0.08)',
+  },
+  typeText: {
+    color: '#94A3B8',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  typeTextActive: {
+    color: '#F8FAFC',
   },
 });

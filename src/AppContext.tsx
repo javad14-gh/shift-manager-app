@@ -47,7 +47,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           // Query user profile by auth UID from 'users' collection
           const usersRef = collection(db, 'users');
           const q = query(usersRef, where("uid", "==", currentFirebaseUser.uid));
-          const querySnapshot = await getDocs(q);
+          let querySnapshot = await getDocs(q);
+
+          if (querySnapshot.empty) {
+            // Retry once after 2 seconds to avoid race conditions during signup/seeding
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            querySnapshot = await getDocs(q);
+          }
 
           if (!querySnapshot.empty) {
             const userDoc = querySnapshot.docs[0];
@@ -109,6 +115,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let staffQuery;
     if (user.role === 'genel-mudur') {
       staffQuery = query(collection(db, 'users'));
+    } else if (user.role === 'bireysel') {
+      staffQuery = query(collection(db, 'users'), where('uid', '==', firebaseUser.uid));
     } else if (user.branchId) {
       staffQuery = query(collection(db, 'users'), where('subeId', '==', user.branchId));
     } else {
@@ -128,6 +136,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let shiftsQuery;
     if (user.role === 'genel-mudur') {
       shiftsQuery = query(collection(db, 'shifts'));
+    } else if (user.role === 'bireysel') {
+      shiftsQuery = query(collection(db, 'shifts'), where('personelId', '==', firebaseUser.uid));
     } else if (user.branchId) {
       shiftsQuery = query(collection(db, 'shifts'), where('subeId', '==', user.branchId));
     } else {

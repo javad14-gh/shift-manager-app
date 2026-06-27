@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "423069985632",
+    "project_id": "shift-manager-535ca",
+    "storage_bucket": "shift-manager-535ca.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:423069985632:android:1c39c65ed28cbfa6b60c05",
+        "android_client_info": {
+          "package_name": "com.npmanger.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAaO1hjGAOOCyqTEzvcYh6RpbVA8jfA9Vc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

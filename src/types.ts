@@ -5,7 +5,7 @@ export interface Sube {
   longitude?: number;
 }
 
-export type UserRole = 'genel-mudur' | 'sube-muduru' | 'calisan' | 'sistem-yoneticisi';
+export type UserRole = 'genel-mudur' | 'sube-muduru' | 'calisan' | 'sistem-yoneticisi' | 'bireysel';
 
 export interface Personel {
   personelId: string; // The document ID

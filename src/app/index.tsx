@@ -196,7 +196,7 @@ export default function HomeScreen() {
           <View style={styles.profileDetails}>
             <ThemedText style={styles.userName}>{user?.name}</ThemedText>
             <ThemedText style={styles.userRole}>
-              {user?.role === 'genel-mudur' ? 'Genel Müdür' : user?.role === 'sube-muduru' ? 'Şube Müdürü' : 'Çalışan'}
+              {user?.role === 'genel-mudur' ? 'Genel Müdür' : user?.role === 'sube-muduru' ? 'Şube Müdürü' : user?.role === 'bireysel' ? 'Bireysel Kullanıcı' : 'Çalışan'}
             </ThemedText>
             <ThemedText style={styles.userBranch}>{userBranchName}</ThemedText>
           </View>
