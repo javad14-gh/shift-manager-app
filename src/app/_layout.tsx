@@ -2,10 +2,11 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
 import { useColorScheme, ActivityIndicator, View, StyleSheet } from 'react-native';
 import { AppProvider, useApp } from '../AppContext';
 import { LoginScreen } from '../components/LoginScreen';
+import { OnboardingScreen } from '../components/OnboardingScreen';
 import AppTabs from '@/components/app-tabs';
 
 function MainLayout() {
-  const { user, isLoading } = useApp();
+  const { user, profiles, isLoading } = useApp();
 
   if (isLoading) {
     return (
@@ -17,6 +18,10 @@ function MainLayout() {
 
   if (!user) {
     return <LoginScreen />;
+  }
+
+  if (profiles.length === 0) {
+    return <OnboardingScreen />;
   }
 
   return <AppTabs />;

@@ -14,10 +14,10 @@ import { Spacing } from '@/constants/theme';
 import { ThemedText } from './themed-text';
 import { ThemedView } from './themed-view';
 import { useApp } from '../AppContext';
-import { LogIn, Mail, Lock, User, Briefcase, UserPlus } from 'lucide-react-native';
+import { LogIn, Mail, Lock, User, Briefcase, UserPlus, Key } from 'lucide-react-native';
 import { auth, db } from '../firebase';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 
 const { width } = Dimensions.get('window');
 
@@ -27,8 +27,7 @@ export function LoginScreen() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [accountType, setAccountType] = useState<'business' | 'individual'>('individual');
-  const [businessName, setBusinessName] = useState('');
+  // No profile states here - profile creation is handled in onboarding flow
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -60,48 +59,19 @@ export function LoginScreen() {
       setError('Lütfen tüm alanları doldurunuz.');
       return;
     }
-    if (accountType === 'business' && !businessName) {
-      setError('Lütfen işletme adını giriniz.');
-      return;
-    }
     setError(null);
     setLoading(true);
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
       const uid = userCredential.user.uid;
 
-      if (accountType === 'business') {
-        const branchId = 'sube-' + Math.random().toString(36).substring(2, 9);
-        await setDoc(doc(db, 'branches', branchId), {
-          subeId: branchId,
-          adi: businessName
-        });
-
-        await setDoc(doc(db, 'users', uid), {
-          personelId: uid,
-          uid: uid,
-          subeId: branchId,
-          adi: name,
-          rol: 'genel-mudur',
-          tanimlananSaat: 8,
-          email: email.trim().toLowerCase(),
-          aktif: true
-        });
-      } else {
-        await setDoc(doc(db, 'users', uid), {
-          personelId: uid,
-          uid: uid,
-          subeId: 'bireysel-sube',
-          adi: name,
-          rol: 'bireysel',
-          tanimlananSaat: 8,
-          email: email.trim().toLowerCase(),
-          aktif: true
-        });
-      }
-
-      alert('Kayıt başarıyla tamamlandı!');
-      await login(email.trim(), password);
+      // Create parent user document only
+      await setDoc(doc(db, 'users', uid), {
+        uid: uid,
+        adi: name,
+        email: email.trim().toLowerCase(),
+        aktif: true
+      });
     } catch (err: any) {
       console.error(err);
       if (err.code === 'auth/email-already-in-use') {
@@ -109,7 +79,7 @@ export function LoginScreen() {
       } else if (err.code === 'auth/weak-password') {
         setError('Şifre en az 6 karakter olmalıdır.');
       } else {
-        setError('Kayıt oluşturulurken bir hata oluştu: ' + err.message);
+        setError('Kayıt yapılırken bir hata oluştu. Lütfen tekrar deneyin.');
       }
     } finally {
       setLoading(false);
@@ -137,20 +107,40 @@ export function LoginScreen() {
       
       const uid = userCredential.user.uid;
       
-      await setDoc(doc(db, 'branches', 'sube-1'), {
-        subeId: 'sube-1',
-        adi: 'Merkez Şube'
+      await setDoc(doc(db, 'workspaces', 'isl-1'), {
+        isletmeId: 'isl-1',
+        adi: 'Merkez Şube',
+        davetKodu: 'NP-100',
+        cokSubeli: false
       });
       
       await setDoc(doc(db, 'users', uid), {
-        personelId: uid,
         uid: uid,
-        subeId: 'sube-1',
         adi: 'Pouriya',
-        rol: 'genel-mudur',
-        tanimlananSaat: 8,
         email: email,
         aktif: true
+      });
+
+      await setDoc(doc(db, 'profiles', 'prof-manager-1'), {
+        profileId: 'prof-manager-1',
+        ownerUid: uid,
+        title: 'Merkez Şube Müdürü',
+        rol: 'genel-mudur',
+        isletmeId: 'isl-1',
+        subeId: 'merkez',
+        aktif: true,
+        email: email
+      });
+
+      await setDoc(doc(db, 'profiles', 'prof-personal-1'), {
+        profileId: 'prof-personal-1',
+        ownerUid: uid,
+        title: 'Kişisel Takip',
+        rol: 'bireysel',
+        isletmeId: 'bireysel-isletme',
+        subeId: 'merkez',
+        aktif: true,
+        email: email
       });
       
       alert('Geliştirici veri tabanı başarıyla kuruldu! Otomatik giriş yapılıyor...');
@@ -200,50 +190,7 @@ export function LoginScreen() {
           </View>
         )}
 
-        {isRegistering && (
-          <View style={styles.typeSelectorContainer}>
-            <TouchableOpacity
-              onPress={() => setAccountType('individual')}
-              style={[
-                styles.typeOption,
-                accountType === 'individual' && styles.typeOptionActive,
-              ]}
-            >
-              <User size={18} color={accountType === 'individual' ? '#6366F1' : '#94A3B8'} style={{ marginRight: 6 }} />
-              <ThemedText style={[
-                styles.typeText,
-                accountType === 'individual' && styles.typeTextActive
-              ]}>Bireysel</ThemedText>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => setAccountType('business')}
-              style={[
-                styles.typeOption,
-                accountType === 'business' && styles.typeOptionActive,
-              ]}
-            >
-              <Briefcase size={18} color={accountType === 'business' ? '#6366F1' : '#94A3B8'} style={{ marginRight: 6 }} />
-              <ThemedText style={[
-                styles.typeText,
-                accountType === 'business' && styles.typeTextActive
-              ]}>İşletme</ThemedText>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {isRegistering && accountType === 'business' && (
-          <View style={styles.inputContainer}>
-            <Briefcase size={20} color="#888" style={styles.inputIcon} />
-            <TextInput
-              placeholder="İşletme / Restoran Adı"
-              placeholderTextColor="#888"
-              value={businessName}
-              onChangeText={setBusinessName}
-              style={styles.input}
-            />
-          </View>
-        )}
+        {/* Registration type inputs removed; onboarding guides new users now */}
 
         <View style={styles.inputContainer}>
           <Mail size={20} color="#888" style={styles.inputIcon} />

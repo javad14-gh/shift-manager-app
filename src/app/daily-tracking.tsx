@@ -39,7 +39,7 @@ import { doc, updateDoc, collection, addDoc, Timestamp } from 'firebase/firestor
 import { db } from '../firebase';
 
 export default function DailyTrackingScreen() {
-  const { user, staff, shifts, isLoading } = useApp();
+  const { user, activeProfile, staff, shifts, isLoading } = useApp();
   const [selectedDate, setSelectedDate] = useState<Date>(getBusinessDate());
   const [editingRow, setEditingRow] = useState<string | null>(null);
   
@@ -49,9 +49,9 @@ export default function DailyTrackingScreen() {
   const [savingStates, setSavingStates] = useState<Record<string, boolean>>({});
 
   const visibleStaff = useMemo(() => {
-    if (!user || user.role === 'calisan' || !user.branchId) return [];
-    return staff.filter(s => s.subeId === user.branchId && s.aktif !== false);
-  }, [user, staff]);
+    if (!activeProfile || activeProfile.rol === 'calisan' || activeProfile.rol === 'bireysel') return [];
+    return staff.filter(s => s.isletmeId === activeProfile.isletmeId && s.personelId !== activeProfile.profileId && s.aktif !== false);
+  }, [activeProfile, staff]);
 
   const dailyShifts = useMemo(() => {
     const shiftsForDay = shifts.filter(s => s.tarih && isSameDay(new Date(s.tarih), selectedDate));
@@ -83,7 +83,9 @@ export default function DailyTrackingScreen() {
 
   const handleSave = async (personelId: string) => {
     const existingShift = dailyShifts.get(personelId);
-    if (!user?.branchId) return;
+    const activeWorkspaceId = activeProfile?.isletmeId;
+    const activeBranchId = activeProfile?.subeId || 'merkez';
+    if (!activeWorkspaceId) return;
 
     setSavingStates(prev => ({ ...prev, [personelId]: true }));
 
@@ -123,7 +125,8 @@ export default function DailyTrackingScreen() {
         // Create new shift record for clock in/out if it didn't exist
         const personnel = staff.find(s => s.personelId === personelId);
         const newShiftPayload = {
-          subeId: user.branchId,
+          isletmeId: activeWorkspaceId,
+          subeId: activeBranchId,
           personelId,
           personelAdi: personnel?.adi || 'Bilinmeyen Personel',
           tarih: Timestamp.fromDate(selectedDate),

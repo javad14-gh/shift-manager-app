@@ -1,7 +1,7 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { useApp } from '../AppContext';
-import { LayoutDashboard, Clock, CalendarRange, LogOut } from 'lucide-react-native';
+import { LayoutDashboard, Clock, CalendarRange, LogOut, Settings } from 'lucide-react-native';
 import { TouchableOpacity } from 'react-native';
 
 export default function AppTabs() {
@@ -70,6 +70,16 @@ export default function AppTabs() {
           href: isManager ? '/planning' : null,
           tabBarIcon: ({ color, size }) => (
             <CalendarRange size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="explore"
+        options={{
+          title: 'Ayarlar',
+          tabBarLabel: 'Ayarlar',
+          tabBarIcon: ({ color, size }) => (
+            <Settings size={size} color={color} />
           ),
         }}
       />

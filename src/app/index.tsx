@@ -7,9 +7,15 @@ import {
   ActivityIndicator,
   FlatList,
   Platform,
-  Image
+  Image,
+  Alert,
+  Modal,
+  TextInput,
+  Share
 } from 'react-native';
 import { useApp } from '../AppContext';
+import { WeeklyCalendar } from '../components/weekly-calendar';
+import { UserProfile } from '../types';
 import { ThemedText } from '../components/themed-text';
 import { ThemedView } from '../components/themed-view';
 import { Spacing } from '@/constants/theme';
@@ -23,7 +29,13 @@ import {
   Users,
   Award,
   ArrowRight,
-  TrendingUp
+  TrendingUp,
+  Settings,
+  Plus,
+  ToggleLeft,
+  ToggleRight,
+  Briefcase,
+  Share2
 } from 'lucide-react-native';
 import {
   startOfMonth,
@@ -32,11 +44,12 @@ import {
   differenceInMinutes,
   addDays,
   format,
-  isSameDay
+  isSameDay,
+  startOfDay
 } from 'date-fns';
 import { tr } from 'date-fns/locale';
 import { getBusinessDate } from '../utils';
-import { doc, updateDoc, Timestamp } from 'firebase/firestore';
+import { doc, updateDoc, Timestamp, collection, query, where, getDocs, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useRouter } from 'expo-router';
 
@@ -61,9 +74,15 @@ const calculateOvertimeForShifts = (shifts: any[]): string => {
 };
 
 export default function HomeScreen() {
-  const { user, staff, shifts, branches, isLoading } = useApp();
+  const { user, firebaseUser, profiles, activeProfile, setActiveProfile, refreshProfiles, staff, shifts, workspaces, branches, isLoading } = useApp();
+  const [selectedDate, setSelectedDate] = useState<Date>(getBusinessDate());
   const [clockLoading, setClockLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('Durum kontrol ediliyor...');
+  const [switcherVisible, setSwitcherVisible] = useState(false);
+  const [createMode, setCreateMode] = useState<'choose' | 'business' | 'employee' | 'individual' | null>(null);
+  const [newProfileTitle, setNewProfileTitle] = useState('');
+  const [newProfileCode, setNewProfileCode] = useState('');
+  const [newProfileBizName, setNewProfileBizName] = useState('');
   const router = useRouter();
 
   const today = getBusinessDate();
@@ -74,44 +93,163 @@ export default function HomeScreen() {
     return staff.find(s => s.email.toLowerCase() === user.email.toLowerCase());
   }, [staff, user]);
 
-  // Find user's branch
+  // Find user's workspace/branch name
   const userBranchName = useMemo(() => {
-    if (!user?.branchId) return 'Genel Merkez';
-    const branch = branches.find(b => b.subeId === user.branchId);
-    return branch ? branch.adi : 'Şube Bilgisi Yok';
-  }, [branches, user]);
+    if (!activeProfile) return 'Profil Yok';
+    const workspace = workspaces.find(w => w.isletmeId === activeProfile.isletmeId);
+    const workspaceName = workspace ? workspace.adi : 'Kişisel';
+    
+    if (activeProfile.rol === 'bireysel') {
+      return workspaceName;
+    }
+    
+    if (workspace?.cokSubeli && activeProfile.subeId) {
+      const branch = branches.find(b => b.subeId === activeProfile.subeId);
+      return `${workspaceName} - ${branch ? branch.adi : 'Genel'}`;
+    }
+    
+    return workspaceName;
+  }, [workspaces, branches, activeProfile]);
 
-  // Today's shift for this employee
+  // Join code display and share moved to Settings Screen (explore.tsx)
+
+  // Selected day's shift for this employee
   const todaysShift = useMemo(() => {
     if (!self) return undefined;
     return shifts.find(s => 
       s.personelId === self.personelId && 
-      isSameDay(new Date(s.tarih), today)
+      isSameDay(new Date(s.tarih), selectedDate)
     );
-  }, [shifts, self, today]);
+  }, [shifts, self, selectedDate]);
 
-  const canClockIn = todaysShift && todaysShift.tur === 'calisma' && !todaysShift.girisSaati;
-  const canClockOut = todaysShift && todaysShift.girisSaati && !todaysShift.cikisSaati;
+  const isActualToday = isSameDay(selectedDate, getBusinessDate());
+  const canClockIn = isActualToday && todaysShift && todaysShift.tur === 'calisma' && !todaysShift.girisSaati;
+  const canClockOut = isActualToday && todaysShift && todaysShift.girisSaati && !todaysShift.cikisSaati;
 
   useEffect(() => {
+    const isActualToday = isSameDay(selectedDate, getBusinessDate());
+    const dayLabel = isActualToday ? 'Bugün' : format(selectedDate, 'EEEE', { locale: tr });
+
     if (todaysShift) {
       if (todaysShift.tur === 'izinli') {
-        setStatusMessage('Bugün izinlisiniz.');
+        setStatusMessage(`${dayLabel} izinlisiniz.`);
       } else if (todaysShift.girisSaati && !todaysShift.cikisSaati) {
         setStatusMessage(`Giriş yapıldı: ${format(new Date(todaysShift.girisSaati), 'HH:mm')}`);
       } else if (todaysShift.girisSaati && todaysShift.cikisSaati) {
-        setStatusMessage('Bugünkü vardiyanız tamamlandı.');
+        setStatusMessage(`${dayLabel}ki vardiyanız tamamlandı.`);
       } else {
         if (todaysShift.planliGiris) {
           setStatusMessage(`Vardiyanız saat ${format(new Date(todaysShift.planliGiris), 'HH:mm')}'da başlıyor. Giriş yapabilirsiniz.`);
         } else {
-          setStatusMessage('Bugün için giriş yapmaya hazırsınız.');
+          setStatusMessage(`${dayLabel} için giriş yapmaya hazırsınız.`);
         }
       }
     } else {
-      setStatusMessage('Bugün için planlanmış bir vardiyanız yok.');
+      setStatusMessage(`${dayLabel} için planlanmış bir vardiyanız yok.`);
     }
-  }, [todaysShift]);
+  }, [todaysShift, selectedDate]);
+
+  const pendingShifts = useMemo(() => {
+    if (!self) return [];
+    return shifts.filter(s => 
+      s.personelId === self.personelId && 
+      s.durum === 'beklemede' &&
+      new Date(s.tarih) >= startOfDay(getBusinessDate())
+    );
+  }, [shifts, self]);
+
+  const handleShiftApproval = async (shiftId: string, status: 'onaylandi' | 'reddedildi') => {
+    try {
+      const shiftRef = doc(db, 'shifts', shiftId);
+      await updateDoc(shiftRef, { durum: status });
+      Alert.alert('Başarılı', status === 'onaylandi' ? 'Vardiya onaylandı.' : 'Vardiya reddedildi.');
+    } catch (error) {
+      console.error("Vardiya onay durumu güncellenemedi:", error);
+      Alert.alert('Hata', 'İşlem gerçekleştirilemedi.');
+    }
+  };
+
+  const handleCreateProfile = async (type: 'business' | 'employee' | 'individual', title: string, code?: string, bizName?: string) => {
+    if (!firebaseUser) return;
+    try {
+      let isletmeId = 'bireysel-isletme';
+      let subeId = 'merkez';
+      
+      if (type === 'employee') {
+        if (!code) {
+          Alert.alert('Hata', 'Katılım kodu gereklidir.');
+          return;
+        }
+        const workspacesRef = collection(db, 'workspaces');
+        const q = query(workspacesRef, where("davetKodu", "==", code.trim().toUpperCase()));
+        const querySnapshot = await getDocs(q);
+        if (querySnapshot.empty) {
+          Alert.alert('Hata', 'Geçersiz katılım kodu.');
+          return;
+        }
+        isletmeId = querySnapshot.docs[0].id;
+        subeId = 'merkez';
+      } else if (type === 'business') {
+        if (!bizName) {
+          Alert.alert('Hata', 'İşletme adı gereklidir.');
+          return;
+        }
+        const newIsletmeId = 'isl-' + Math.random().toString(36).substring(2, 9);
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        let generatedCode = '';
+        for (let i = 0; i < 6; i++) {
+          generatedCode += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        await setDoc(doc(db, 'workspaces', newIsletmeId), {
+          isletmeId: newIsletmeId,
+          adi: bizName,
+          davetKodu: generatedCode,
+          cokSubeli: false
+        });
+        isletmeId = newIsletmeId;
+        subeId = 'merkez';
+      }
+
+      const newProfileId = 'prof-' + Math.random().toString(36).substring(2, 9);
+      const newProfile: UserProfile = {
+        profileId: newProfileId,
+        ownerUid: firebaseUser.uid,
+        title: type === 'business' ? (bizName || '') : title,
+        rol: type === 'business' ? 'genel-mudur' : type === 'employee' ? 'calisan' : 'bireysel',
+        isletmeId: isletmeId,
+        subeId: subeId,
+        aktif: true
+      };
+
+      await setDoc(doc(db, 'profiles', newProfileId), newProfile);
+      Alert.alert('Başarılı', 'Profil başarıyla oluşturuldu.');
+      await refreshProfiles();
+      setActiveProfile(newProfile);
+      setSwitcherVisible(false);
+      setCreateMode(null);
+      setNewProfileTitle('');
+      setNewProfileCode('');
+      setNewProfileBizName('');
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert('Hata', 'Profil oluşturulamadı: ' + e.message);
+    }
+  };
+
+  const handleToggleProfileActive = async (profile: UserProfile) => {
+    if (activeProfile && profile.profileId === activeProfile.profileId && profile.aktif) {
+      Alert.alert('Hata', 'Aktif çalıştığınız profil devre dışı bırakılamaz. Önce başka bir profile geçiş yapın.');
+      return;
+    }
+    
+    try {
+      const profileRef = doc(db, 'profiles', profile.profileId);
+      await updateDoc(profileRef, { aktif: !profile.aktif });
+      await refreshProfiles();
+    } catch (e: any) {
+      Alert.alert('Hata', 'Profil durumu güncellenemedi: ' + e.message);
+    }
+  };
 
   // Handles clock in/out action
   const handleClockAction = async (action: 'in' | 'out') => {
@@ -161,8 +299,8 @@ export default function HomeScreen() {
   const branchStats = useMemo(() => {
     if (user?.role !== 'sube-muduru' && user?.role !== 'genel-mudur') return null;
     
-    // Scheduled today
-    const todaysBranchShifts = shifts.filter(s => isSameDay(new Date(s.tarih), today));
+    // Scheduled for selected date
+    const todaysBranchShifts = shifts.filter(s => isSameDay(new Date(s.tarih), selectedDate));
     const workingToday = todaysBranchShifts.filter(s => s.tur === 'calisma');
     const offToday = todaysBranchShifts.filter(s => s.tur === 'izinli');
     const checkedInToday = workingToday.filter(s => s.girisSaati);
@@ -174,7 +312,7 @@ export default function HomeScreen() {
       off: offToday.length,
       completed: completedToday.length
     };
-  }, [shifts, today, user]);
+  }, [shifts, selectedDate, user]);
 
   if (isLoading) {
     return (
@@ -183,6 +321,11 @@ export default function HomeScreen() {
       </View>
     );
   }
+
+  const branchStatsTitle = useMemo(() => {
+    if (isActualToday) return 'Bugünkü Şube Durumu';
+    return `${format(selectedDate, 'd MMMM', { locale: tr })} Şube Durumu`;
+  }, [selectedDate, isActualToday]);
 
   return (
     <ScrollView contentContainerStyle={styles.scrollContainer} style={styles.container}>
@@ -195,13 +338,57 @@ export default function HomeScreen() {
           />
           <View style={styles.profileDetails}>
             <ThemedText style={styles.userName}>{user?.name}</ThemedText>
-            <ThemedText style={styles.userRole}>
-              {user?.role === 'genel-mudur' ? 'Genel Müdür' : user?.role === 'sube-muduru' ? 'Şube Müdürü' : user?.role === 'bireysel' ? 'Bireysel Kullanıcı' : 'Çalışan'}
-            </ThemedText>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+              <ThemedText style={styles.userRole}>
+                {activeProfile?.title || 'Profil Seçilmedi'}
+              </ThemedText>
+              <View style={[
+                styles.roleLabelBadge,
+                activeProfile?.rol === 'genel-mudur' ? styles.roleBadgeManager : activeProfile?.rol === 'calisan' ? styles.roleBadgeEmployee : styles.roleBadgePersonal
+              ]}>
+                <ThemedText style={styles.roleLabelText}>
+                  {activeProfile?.rol === 'genel-mudur' ? 'İşletme' : activeProfile?.rol === 'calisan' ? 'Çalışan' : 'Bireysel'}
+                </ThemedText>
+              </View>
+            </View>
             <ThemedText style={styles.userBranch}>{userBranchName}</ThemedText>
           </View>
+          
+          <TouchableOpacity onPress={() => setSwitcherVisible(true)} style={styles.switchProfileButton}>
+            <Settings size={20} color="#818CF8" />
+          </TouchableOpacity>
         </View>
       </View>
+
+      {/* Weekly Visual Calendar Strip */}
+      <WeeklyCalendar selectedDate={selectedDate} onSelectDate={setSelectedDate} />
+
+      {/* Shift Approval Card */}
+      {self && pendingShifts.length > 0 && (
+        <View style={styles.approvalCard}>
+          <View style={styles.approvalHeader}>
+            <Calendar size={20} color="#FBBF24" />
+            <ThemedText style={styles.approvalTitle}>Yeni Vardiya Talebi</ThemedText>
+          </View>
+          <ThemedText style={styles.approvalText}>
+            {format(new Date(pendingShifts[0].tarih), 'd MMMM yyyy, EEEE', { locale: tr })} tarihindeki vardiyanız onayınızı bekliyor.
+          </ThemedText>
+          <View style={styles.approvalButtons}>
+            <TouchableOpacity
+              onPress={() => handleShiftApproval(pendingShifts[0].vardiyaId, 'onaylandi')}
+              style={[styles.approvalBtn, styles.approveBtn]}
+            >
+              <ThemedText style={styles.approvalBtnText}>Onayla</ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => handleShiftApproval(pendingShifts[0].vardiyaId, 'reddedildi')}
+              style={[styles.approvalBtn, styles.rejectBtn]}
+            >
+              <ThemedText style={styles.approvalBtnText}>Reddet</ThemedText>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       {/* Overtime Statistic Box */}
       <View style={styles.statRow}>
@@ -215,7 +402,7 @@ export default function HomeScreen() {
       </View>
 
       {/* Clock In / Out Area */}
-      {self && self.rol === 'calisan' && (
+      {self && (self.rol === 'calisan' || self.rol === 'bireysel') && (
         <View style={styles.clockCard}>
           <View style={styles.clockCardHeader}>
             <MapPin size={20} color="#818CF8" />
@@ -243,10 +430,12 @@ export default function HomeScreen() {
         </View>
       )}
 
+      {/* Join code display moved to Settings tab */}
+
       {/* Manager Branch Stats Panel */}
       {branchStats && (
         <View style={styles.managerPanel}>
-          <ThemedText style={styles.sectionTitle}>Bugünkü Şube Durumu</ThemedText>
+          <ThemedText style={styles.sectionTitle}>{branchStatsTitle}</ThemedText>
           <View style={styles.statsGrid}>
             <View style={styles.gridItem}>
               <Users size={24} color="#60A5FA" />
@@ -289,6 +478,219 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
       )}
+
+      {/* Profile Switcher Modal */}
+      <Modal
+        visible={switcherVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setSwitcherVisible(false);
+          setCreateMode(null);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>Profillerim</ThemedText>
+              <TouchableOpacity
+                onPress={() => {
+                  setSwitcherVisible(false);
+                  setCreateMode(null);
+                }}
+                style={styles.modalCloseButton}
+              >
+                <ThemedText style={{ color: '#94A3B8', fontWeight: 'bold' }}>Kapat</ThemedText>
+              </TouchableOpacity>
+            </View>
+
+            {createMode === null ? (
+              <>
+                <ScrollView style={styles.profilesList}>
+                  {profiles.map((p) => {
+                    const isActive = activeProfile?.profileId === p.profileId;
+                    return (
+                      <View
+                        key={p.profileId}
+                        style={[
+                          styles.profileItem,
+                          isActive && styles.profileItemActive,
+                        ]}
+                      >
+                        <TouchableOpacity
+                          onPress={() => {
+                            if (!p.aktif) {
+                              Alert.alert('Uyarı', 'Lütfen önce bu profili aktif hale getirin.');
+                              return;
+                            }
+                            setActiveProfile(p);
+                            setSwitcherVisible(false);
+                          }}
+                          style={styles.profileItemPressable}
+                        >
+                          <View>
+                            <ThemedText style={[styles.profileItemTitle, isActive && styles.profileItemTitleActive]}>
+                              {p.title}
+                            </ThemedText>
+                            <ThemedText style={styles.profileItemSubtitle}>
+                              {p.rol === 'genel-mudur' ? 'İşletme Sahibi' : p.rol === 'calisan' ? 'Çalışan' : 'Bireysel'}
+                            </ThemedText>
+                          </View>
+                        </TouchableOpacity>
+
+                        <View style={styles.profileItemActions}>
+                          <TouchableOpacity
+                            onPress={() => handleToggleProfileActive(p)}
+                            style={styles.toggleActiveButton}
+                          >
+                            {p.aktif ? (
+                              <ToggleRight size={24} color="#10B981" />
+                            ) : (
+                              <ToggleLeft size={24} color="#94A3B8" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+
+                <TouchableOpacity
+                  onPress={() => setCreateMode('choose')}
+                  style={styles.addProfileButton}
+                >
+                  <Plus size={16} color="#fff" style={{ marginRight: 6 }} />
+                  <ThemedText style={styles.addProfileButtonText}>Yeni Profil Ekle</ThemedText>
+                </TouchableOpacity>
+              </>
+            ) : createMode === 'choose' ? (
+              <View style={styles.chooseContainer}>
+                <ThemedText style={styles.chooseLabel}>Hangi tür profil eklemek istersiniz?</ThemedText>
+                
+                <TouchableOpacity
+                  onPress={() => setCreateMode('individual')}
+                  style={styles.chooseOption}
+                >
+                  <User size={20} color="#818CF8" />
+                  <View style={{ marginLeft: 12 }}>
+                    <ThemedText style={styles.chooseOptionTitle}>Bireysel Profil</ThemedText>
+                    <ThemedText style={styles.chooseOptionDesc}>Kendi çalışma saatlerinizi takip etmek için.</ThemedText>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => setCreateMode('employee')}
+                  style={styles.chooseOption}
+                >
+                  <Users size={20} color="#34D399" />
+                  <View style={{ marginLeft: 12 }}>
+                    <ThemedText style={styles.chooseOptionTitle}>Çalışan Profili</ThemedText>
+                    <ThemedText style={styles.chooseOptionDesc}>Bir işletmenin kodunu girerek ekibe dahil olmak için.</ThemedText>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => setCreateMode('business')}
+                  style={styles.chooseOption}
+                >
+                  <Briefcase size={20} color="#F59E0B" />
+                  <View style={{ marginLeft: 12 }}>
+                    <ThemedText style={styles.chooseOptionTitle}>İşletme Sahibi Profili</ThemedText>
+                    <ThemedText style={styles.chooseOptionDesc}>Kendi ekibinizi kurmak ve yönetmek için.</ThemedText>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => setCreateMode(null)}
+                  style={styles.backButton}
+                >
+                  <ThemedText style={styles.backButtonText}>Geri Dön</ThemedText>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.formContainer}>
+                {createMode === 'individual' && (
+                  <>
+                    <ThemedText style={styles.formLabel}>Profil Başlığı</ThemedText>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Örn: Kişisel Takip / Freelance A"
+                      placeholderTextColor="#64748B"
+                      value={newProfileTitle}
+                      onChangeText={setNewProfileTitle}
+                    />
+                    <TouchableOpacity
+                      onPress={() => handleCreateProfile('individual', newProfileTitle)}
+                      style={styles.saveProfileBtn}
+                    >
+                      <ThemedText style={styles.saveProfileBtnText}>Profil Oluştur</ThemedText>
+                    </TouchableOpacity>
+                  </>
+                )}
+
+                {createMode === 'employee' && (
+                  <>
+                    <ThemedText style={styles.formLabel}>Profil Başlığı (İsminiz)</ThemedText>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Örn: Ali Yılmaz"
+                      placeholderTextColor="#64748B"
+                      value={newProfileTitle}
+                      onChangeText={setNewProfileTitle}
+                    />
+                    <ThemedText style={styles.formLabel}>Katılım Kodu (Join Code)</ThemedText>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Örn: NP-XXXX"
+                      placeholderTextColor="#64748B"
+                      value={newProfileCode}
+                      onChangeText={setNewProfileCode}
+                      autoCapitalize="characters"
+                    />
+                    <TouchableOpacity
+                      onPress={() => handleCreateProfile('employee', newProfileTitle, newProfileCode)}
+                      style={styles.saveProfileBtn}
+                    >
+                      <ThemedText style={styles.saveProfileBtnText}>Koda Katıl</ThemedText>
+                    </TouchableOpacity>
+                  </>
+                )}
+
+                {createMode === 'business' && (
+                  <>
+                    <ThemedText style={styles.formLabel}>İşletme / Restoran Adı</ThemedText>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="Örn: Big Chef Burgers"
+                      placeholderTextColor="#64748B"
+                      value={newProfileBizName}
+                      onChangeText={setNewProfileBizName}
+                    />
+                    <TouchableOpacity
+                      onPress={() => handleCreateProfile('business', '', undefined, newProfileBizName)}
+                      style={styles.saveProfileBtn}
+                    >
+                      <ThemedText style={styles.saveProfileBtnText}>İşletme Kur</ThemedText>
+                    </TouchableOpacity>
+                  </>
+                )}
+
+                <TouchableOpacity
+                  onPress={() => {
+                    setCreateMode('choose');
+                    setNewProfileTitle('');
+                    setNewProfileCode('');
+                    setNewProfileBizName('');
+                  }}
+                  style={styles.backButton}
+                >
+                  <ThemedText style={styles.backButtonText}>Geri Dön</ThemedText>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       {/* Upcoming Shifts List for Employee */}
       {self && self.rol === 'calisan' && (
@@ -585,5 +987,291 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: 'bold',
     color: '#F8FAFC',
+  },
+  roleLabelBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginLeft: 8,
+  },
+  roleBadgeManager: {
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+  },
+  roleBadgeEmployee: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+  },
+  roleBadgePersonal: {
+    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+  },
+  roleLabelText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#FFF',
+  },
+  switchProfileButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(99, 102, 241, 0.1)',
+  },
+  codeCard: {
+    backgroundColor: 'rgba(30, 41, 59, 0.7)',
+    borderRadius: 24,
+    padding: Spacing.six,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    marginBottom: Spacing.four,
+  },
+  codeCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Spacing.two,
+  },
+  codeCardTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#F8FAFC',
+    marginLeft: 8,
+  },
+  codeDescription: {
+    fontSize: 13,
+    color: '#94A3B8',
+    marginBottom: Spacing.three,
+    lineHeight: 18,
+  },
+  codeContainer: {
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    borderWidth: 1,
+    borderColor: 'rgba(99, 102, 241, 0.3)',
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  codeText: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#818CF8',
+    letterSpacing: 2,
+  },
+  approvalCard: {
+    backgroundColor: 'rgba(251, 191, 36, 0.08)',
+    borderRadius: 24,
+    padding: Spacing.five,
+    borderWidth: 1,
+    borderColor: 'rgba(251, 191, 36, 0.25)',
+    marginBottom: Spacing.four,
+  },
+  approvalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Spacing.two,
+  },
+  approvalTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FBBF24',
+    marginLeft: 8,
+  },
+  approvalText: {
+    fontSize: 14,
+    color: '#F8FAFC',
+    marginBottom: Spacing.four,
+    lineHeight: 20,
+  },
+  approvalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  approvalBtn: {
+    flex: 1,
+    height: 40,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginHorizontal: Spacing.one,
+  },
+  approveBtn: {
+    backgroundColor: '#10B981',
+  },
+  rejectBtn: {
+    backgroundColor: '#EF4444',
+  },
+  approvalBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.8)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#0F172A',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 24,
+    maxHeight: '80%',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#F8FAFC',
+  },
+  modalCloseButton: {
+    padding: 4,
+  },
+  profilesList: {
+    marginBottom: 16,
+  },
+  profileItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: 'rgba(30, 41, 59, 0.4)',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.04)',
+  },
+  profileItemActive: {
+    backgroundColor: 'rgba(99, 102, 241, 0.08)',
+    borderColor: 'rgba(99, 102, 241, 0.3)',
+  },
+  profileItemPressable: {
+    flex: 1,
+  },
+  profileItemTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#E2E8F0',
+  },
+  profileItemTitleActive: {
+    color: '#818CF8',
+    fontWeight: 'bold',
+  },
+  profileItemSubtitle: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  profileItemActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  toggleActiveButton: {
+    padding: 8,
+  },
+  addProfileButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#6366F1',
+    borderRadius: 14,
+    height: 48,
+    marginTop: 8,
+  },
+  addProfileButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  chooseContainer: {
+    paddingVertical: 8,
+  },
+  chooseLabel: {
+    fontSize: 14,
+    color: '#94A3B8',
+    marginBottom: 16,
+  },
+  chooseOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(30, 41, 59, 0.4)',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.04)',
+  },
+  chooseOptionTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#F8FAFC',
+  },
+  chooseOptionDesc: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  backButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    marginTop: 8,
+  },
+  backButtonText: {
+    color: '#94A3B8',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  formContainer: {
+    paddingVertical: 8,
+  },
+  formLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#94A3B8',
+    marginBottom: 8,
+  },
+  formInput: {
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 12,
+    height: 44,
+    paddingHorizontal: 12,
+    color: '#FFF',
+    fontSize: 14,
+    marginBottom: 16,
+  },
+  saveProfileBtn: {
+    backgroundColor: '#10B981',
+    borderRadius: 12,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  saveProfileBtnText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  shareCodeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#6366F1',
+    borderRadius: 12,
+    height: 40,
+    marginTop: 12,
+  },
+  shareCodeBtnText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: 'bold',
   },
 });

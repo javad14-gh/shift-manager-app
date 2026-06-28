@@ -13,6 +13,7 @@ import {
   Share
 } from 'react-native';
 import { useApp } from '../AppContext';
+import { WeeklyCalendar } from '../components/weekly-calendar';
 import { ThemedText } from '../components/themed-text';
 import { ThemedView } from '../components/themed-view';
 import { Spacing } from '@/constants/theme';
@@ -42,18 +43,25 @@ import { doc, collection, writeBatch, Timestamp, deleteField } from 'firebase/fi
 import { db } from '../firebase';
 
 export default function ShiftPlanningScreen() {
-  const { user, staff, shifts, isLoading } = useApp();
+  const { user, activeProfile, staff, shifts, isLoading } = useApp();
   const [selectedDate, setSelectedDate] = useState<Date>(getBusinessDate());
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Local form state: { [personelId]: { tur: 'calisma'|'izinli', planliGiris: 'HH:mm' } }
-  const [shiftData, setShiftData] = useState<Record<string, { tur: 'calisma' | 'izinli', planliGiris: string }>>({});
+  const [shiftData, setShiftData] = useState<Record<string, { tur: 'calisma' | 'izinli'; planliGiris: string }>>({});
+
+  const activeWorkspaceId = useMemo(() => {
+    return activeProfile?.isletmeId || 'default-isletme';
+  }, [activeProfile]);
+
+  const activeBranchId = useMemo(() => {
+    return activeProfile?.subeId || 'merkez';
+  }, [activeProfile]);
 
   const visibleStaff = useMemo(() => {
-    if (!user || user.role === 'calisan' || !user.branchId) return [];
-    return staff.filter(s => s.subeId === user.branchId && s.aktif !== false);
-  }, [user, staff]);
+    if (!activeProfile || activeProfile.rol === 'calisan' || activeProfile.rol === 'bireysel') return [];
+    return staff.filter(s => s.isletmeId === activeProfile.isletmeId && s.personelId !== activeProfile.profileId && s.aktif !== false);
+  }, [activeProfile, staff]);
 
   const dailyShifts = useMemo(() => {
     const shiftsForDay = shifts.filter(s => s.tarih && isSameDay(new Date(s.tarih), selectedDate));
@@ -75,16 +83,6 @@ export default function ShiftPlanningScreen() {
     setShiftData(newShiftData);
   }, [visibleStaff, dailyShifts, isEditing]);
 
-  const handlePrevDay = () => {
-    setSelectedDate(prev => subDays(prev, 1));
-    setIsEditing(false);
-  };
-
-  const handleNextDay = () => {
-    setSelectedDate(prev => addDays(prev, 1));
-    setIsEditing(false);
-  };
-
   const handleShiftDataChange = (personelId: string, field: 'tur' | 'planliGiris', value: string) => {
     setShiftData(prev => ({
       ...prev,
@@ -96,7 +94,7 @@ export default function ShiftPlanningScreen() {
   };
 
   const handleSaveAll = async () => {
-    if (!user?.branchId) return;
+    if (!activeWorkspaceId) return;
     setIsSaving(true);
     const batch = writeBatch(db);
 
@@ -108,12 +106,14 @@ export default function ShiftPlanningScreen() {
       const existingShift = dailyShifts.get(personelId);
 
       const shiftPayload: any = {
-        subeId: user.branchId,
+        isletmeId: activeWorkspaceId,
+        subeId: activeBranchId,
         personelId: personel.personelId,
         personelAdi: personel.adi,
         tarih: Timestamp.fromDate(startOfDay(selectedDate)),
         tur: data.tur,
         planliSureDakika: (personel.tanimlananSaat || 8) * 60,
+        durum: existingShift?.durum || 'beklemede',
       };
 
       if (data.tur === 'calisma') {
@@ -125,7 +125,6 @@ export default function ShiftPlanningScreen() {
         }
         shiftPayload.planliGiris = Timestamp.fromDate(combinedDate);
       } else {
-        // Leave days remove specific planned times
         shiftPayload.planliGiris = deleteField();
         shiftPayload.girisSaati = deleteField();
         shiftPayload.cikisSaati = deleteField();
@@ -153,7 +152,6 @@ export default function ShiftPlanningScreen() {
     }
   };
 
-  // Generate and open share sheet
   const handleShare = async () => {
     let text = `**Vardiya Planı - ${format(selectedDate, 'd MMMM yyyy, EEEE', { locale: tr })}**\n\n`;
     
@@ -188,25 +186,8 @@ export default function ShiftPlanningScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Date Header Stepper */}
-      <View style={styles.dateStepper}>
-        <TouchableOpacity onPress={handlePrevDay} style={styles.stepperButton}>
-          <ChevronLeft size={24} color="#F8FAFC" />
-        </TouchableOpacity>
-        
-        <View style={styles.dateLabelContainer}>
-          <Calendar size={18} color="#6366F1" style={{ marginRight: 8 }} />
-          <ThemedText style={styles.dateText}>
-            {format(selectedDate, 'd MMMM yyyy, EEEE', { locale: tr })}
-          </ThemedText>
-        </View>
+      <WeeklyCalendar selectedDate={selectedDate} onSelectDate={setSelectedDate} />
 
-        <TouchableOpacity onPress={handleNextDay} style={styles.stepperButton}>
-          <ChevronRight size={24} color="#F8FAFC" />
-        </TouchableOpacity>
-      </View>
-
-      {/* Action Buttons Panel */}
       <View style={styles.actionHeader}>
         {isEditing ? (
           <View style={styles.editingActions}>
@@ -254,7 +235,6 @@ export default function ShiftPlanningScreen() {
         )}
       </View>
 
-      {/* Staff Planner Grid */}
       {visibleStaff.length === 0 ? (
         <View style={styles.emptyContainer}>
           <ThemedText style={styles.emptyText}>Planlanacak aktif personel bulunamadı.</ThemedText>
@@ -266,6 +246,7 @@ export default function ShiftPlanningScreen() {
           contentContainerStyle={styles.listContainer}
           renderItem={({ item }) => {
             const currentData = shiftData[item.personelId] || { tur: 'calisma', planliGiris: '09:00' };
+            const existingShift = dailyShifts.get(item.personelId);
 
             return (
               <View style={styles.plannerCard}>
@@ -276,7 +257,6 @@ export default function ShiftPlanningScreen() {
 
                 {isEditing ? (
                   <View style={styles.editSection}>
-                    {/* Toggle Work / Leave */}
                     <View style={styles.toggleGroup}>
                       <TouchableOpacity
                         onPress={() => handleShiftDataChange(item.personelId, 'tur', 'calisma')}
@@ -304,7 +284,6 @@ export default function ShiftPlanningScreen() {
                       </TouchableOpacity>
                     </View>
 
-                    {/* Start Time Input (Visible only if 'calisma') */}
                     {currentData.tur === 'calisma' && (
                       <View style={styles.timeInputContainer}>
                         <Clock size={14} color="#94A3B8" style={{ marginRight: 6 }} />
@@ -322,17 +301,37 @@ export default function ShiftPlanningScreen() {
                   </View>
                 ) : (
                   <View style={styles.displaySection}>
-                    {currentData.tur === 'izinli' ? (
-                      <View style={[styles.badge, styles.badgeOff]}>
-                        <Coffee size={12} color="#94A3B8" style={{ marginRight: 4 }} />
-                        <Text style={styles.badgeTextOff}>İzinli</Text>
-                      </View>
-                    ) : (
-                      <View style={[styles.badge, styles.badgeWork]}>
-                        <Clock size={12} color="#818CF8" style={{ marginRight: 4 }} />
-                        <Text style={styles.badgeTextWork}>Giriş: {currentData.planliGiris}</Text>
-                      </View>
-                    )}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      {currentData.tur === 'izinli' ? (
+                        <View style={[styles.badge, styles.badgeOff]}>
+                          <Coffee size={12} color="#94A3B8" style={{ marginRight: 4 }} />
+                          <Text style={styles.badgeTextOff}>İzinli</Text>
+                        </View>
+                      ) : (
+                        <View style={[styles.badge, styles.badgeWork]}>
+                          <Clock size={12} color="#818CF8" style={{ marginRight: 4 }} />
+                          <Text style={styles.badgeTextWork}>Giriş: {currentData.planliGiris}</Text>
+                        </View>
+                      )}
+
+                      {existingShift && (
+                        <View style={[
+                          styles.statusBadge,
+                          existingShift.durum === 'onaylandi' && styles.statusBadgeApproved,
+                          existingShift.durum === 'reddedildi' && styles.statusBadgeRejected,
+                          existingShift.durum === 'beklemede' && styles.statusBadgePending
+                        ]}>
+                          <Text style={[
+                            styles.statusBadgeText,
+                            existingShift.durum === 'onaylandi' && styles.statusBadgeTextApproved,
+                            existingShift.durum === 'reddedildi' && styles.statusBadgeTextRejected,
+                            existingShift.durum === 'beklemede' && styles.statusBadgeTextPending
+                          ]}>
+                            {existingShift.durum === 'onaylandi' ? 'Onaylandı' : existingShift.durum === 'reddedildi' ? 'Reddedildi' : 'Beklemede'}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
                   </View>
                 )}
               </View>
@@ -354,34 +353,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#0F172A',
-  },
-  dateStepper: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: 'rgba(30, 41, 59, 0.7)',
-    margin: Spacing.four,
-    borderRadius: 16,
-    padding: Spacing.two,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  stepperButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.5)',
-  },
-  dateLabelContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  dateText: {
-    color: '#F8FAFC',
-    fontWeight: 'bold',
-    fontSize: 14,
   },
   actionHeader: {
     paddingHorizontal: Spacing.four,
@@ -507,6 +478,43 @@ const styles = StyleSheet.create({
     color: '#F8FAFC',
     fontSize: 13,
     textAlign: 'center',
+  },
+  noShiftsText: {
+    color: '#94A3B8',
+    fontSize: 13,
+    textAlign: 'center',
+    paddingVertical: Spacing.four,
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  statusBadgeApproved: {
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+  },
+  statusBadgeTextApproved: {
+    color: '#10B981',
+  },
+  statusBadgeRejected: {
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+  },
+  statusBadgeTextRejected: {
+    color: '#EF4444',
+  },
+  statusBadgePending: {
+    backgroundColor: 'rgba(251, 191, 36, 0.1)',
+    borderColor: 'rgba(251, 191, 36, 0.3)',
+  },
+  statusBadgeTextPending: {
+    color: '#FBBF24',
+  },
+  statusBadgeText: {
+    fontSize: 11,
+    fontWeight: 'bold',
   },
   displaySection: {
     flexDirection: 'row',
