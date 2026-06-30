@@ -35,7 +35,8 @@ import {
   ToggleLeft,
   ToggleRight,
   Briefcase,
-  Share2
+  Share2,
+  ChevronDown
 } from 'lucide-react-native';
 import {
   startOfMonth,
@@ -78,11 +79,7 @@ export default function HomeScreen() {
   const [selectedDate, setSelectedDate] = useState<Date>(getBusinessDate());
   const [clockLoading, setClockLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('Durum kontrol ediliyor...');
-  const [switcherVisible, setSwitcherVisible] = useState(false);
-  const [createMode, setCreateMode] = useState<'choose' | 'business' | 'employee' | 'individual' | null>(null);
-  const [newProfileTitle, setNewProfileTitle] = useState('');
-  const [newProfileCode, setNewProfileCode] = useState('');
-  const [newProfileBizName, setNewProfileBizName] = useState('');
+  // Switcher states removed (profile lists are now on their own screen)
   const router = useRouter();
 
   const today = getBusinessDate();
@@ -169,87 +166,7 @@ export default function HomeScreen() {
     }
   };
 
-  const handleCreateProfile = async (type: 'business' | 'employee' | 'individual', title: string, code?: string, bizName?: string) => {
-    if (!firebaseUser) return;
-    try {
-      let isletmeId = 'bireysel-isletme';
-      let subeId = 'merkez';
-      
-      if (type === 'employee') {
-        if (!code) {
-          Alert.alert('Hata', 'Katılım kodu gereklidir.');
-          return;
-        }
-        const workspacesRef = collection(db, 'workspaces');
-        const q = query(workspacesRef, where("davetKodu", "==", code.trim().toUpperCase()));
-        const querySnapshot = await getDocs(q);
-        if (querySnapshot.empty) {
-          Alert.alert('Hata', 'Geçersiz katılım kodu.');
-          return;
-        }
-        isletmeId = querySnapshot.docs[0].id;
-        subeId = 'merkez';
-      } else if (type === 'business') {
-        if (!bizName) {
-          Alert.alert('Hata', 'İşletme adı gereklidir.');
-          return;
-        }
-        const newIsletmeId = 'isl-' + Math.random().toString(36).substring(2, 9);
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-        let generatedCode = '';
-        for (let i = 0; i < 6; i++) {
-          generatedCode += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        await setDoc(doc(db, 'workspaces', newIsletmeId), {
-          isletmeId: newIsletmeId,
-          adi: bizName,
-          davetKodu: generatedCode,
-          cokSubeli: false
-        });
-        isletmeId = newIsletmeId;
-        subeId = 'merkez';
-      }
-
-      const newProfileId = 'prof-' + Math.random().toString(36).substring(2, 9);
-      const newProfile: UserProfile = {
-        profileId: newProfileId,
-        ownerUid: firebaseUser.uid,
-        title: type === 'business' ? (bizName || '') : title,
-        rol: type === 'business' ? 'genel-mudur' : type === 'employee' ? 'calisan' : 'bireysel',
-        isletmeId: isletmeId,
-        subeId: subeId,
-        aktif: true
-      };
-
-      await setDoc(doc(db, 'profiles', newProfileId), newProfile);
-      Alert.alert('Başarılı', 'Profil başarıyla oluşturuldu.');
-      await refreshProfiles();
-      setActiveProfile(newProfile);
-      setSwitcherVisible(false);
-      setCreateMode(null);
-      setNewProfileTitle('');
-      setNewProfileCode('');
-      setNewProfileBizName('');
-    } catch (e: any) {
-      console.error(e);
-      Alert.alert('Hata', 'Profil oluşturulamadı: ' + e.message);
-    }
-  };
-
-  const handleToggleProfileActive = async (profile: UserProfile) => {
-    if (activeProfile && profile.profileId === activeProfile.profileId && profile.aktif) {
-      Alert.alert('Hata', 'Aktif çalıştığınız profil devre dışı bırakılamaz. Önce başka bir profile geçiş yapın.');
-      return;
-    }
-    
-    try {
-      const profileRef = doc(db, 'profiles', profile.profileId);
-      await updateDoc(profileRef, { aktif: !profile.aktif });
-      await refreshProfiles();
-    } catch (e: any) {
-      Alert.alert('Hata', 'Profil durumu güncellenemedi: ' + e.message);
-    }
-  };
+  // Profile switcher active toggles and profile creation handlers moved to profiles.tsx screen
 
   // Handles clock in/out action
   const handleClockAction = async (action: 'in' | 'out') => {
@@ -330,14 +247,17 @@ export default function HomeScreen() {
   return (
     <ScrollView contentContainerStyle={styles.scrollContainer} style={styles.container}>
       {/* Header Profile Greeting */}
-      <View style={styles.profileCard}>
+      <TouchableOpacity onPress={() => router.push('/profiles' as any)} style={styles.profileCard}>
         <View style={styles.profileHeader}>
           <Image
             source={{ uri: user?.avatar || 'https://picsum.photos/seed/restaurant/100/100' }}
             style={styles.avatar}
           />
           <View style={styles.profileDetails}>
-            <ThemedText style={styles.userName}>{user?.name}</ThemedText>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <ThemedText style={styles.userName}>{user?.name}</ThemedText>
+              <ChevronDown size={16} color="#94A3B8" style={{ marginLeft: 6 }} />
+            </View>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
               <ThemedText style={styles.userRole}>
                 {activeProfile?.title || 'Profil Seçilmedi'}
@@ -353,12 +273,8 @@ export default function HomeScreen() {
             </View>
             <ThemedText style={styles.userBranch}>{userBranchName}</ThemedText>
           </View>
-          
-          <TouchableOpacity onPress={() => setSwitcherVisible(true)} style={styles.switchProfileButton}>
-            <Settings size={20} color="#818CF8" />
-          </TouchableOpacity>
         </View>
-      </View>
+      </TouchableOpacity>
 
       {/* Weekly Visual Calendar Strip */}
       <WeeklyCalendar selectedDate={selectedDate} onSelectDate={setSelectedDate} />
@@ -478,219 +394,6 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
       )}
-
-      {/* Profile Switcher Modal */}
-      <Modal
-        visible={switcherVisible}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => {
-          setSwitcherVisible(false);
-          setCreateMode(null);
-        }}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <ThemedText style={styles.modalTitle}>Profillerim</ThemedText>
-              <TouchableOpacity
-                onPress={() => {
-                  setSwitcherVisible(false);
-                  setCreateMode(null);
-                }}
-                style={styles.modalCloseButton}
-              >
-                <ThemedText style={{ color: '#94A3B8', fontWeight: 'bold' }}>Kapat</ThemedText>
-              </TouchableOpacity>
-            </View>
-
-            {createMode === null ? (
-              <>
-                <ScrollView style={styles.profilesList}>
-                  {profiles.map((p) => {
-                    const isActive = activeProfile?.profileId === p.profileId;
-                    return (
-                      <View
-                        key={p.profileId}
-                        style={[
-                          styles.profileItem,
-                          isActive && styles.profileItemActive,
-                        ]}
-                      >
-                        <TouchableOpacity
-                          onPress={() => {
-                            if (!p.aktif) {
-                              Alert.alert('Uyarı', 'Lütfen önce bu profili aktif hale getirin.');
-                              return;
-                            }
-                            setActiveProfile(p);
-                            setSwitcherVisible(false);
-                          }}
-                          style={styles.profileItemPressable}
-                        >
-                          <View>
-                            <ThemedText style={[styles.profileItemTitle, isActive && styles.profileItemTitleActive]}>
-                              {p.title}
-                            </ThemedText>
-                            <ThemedText style={styles.profileItemSubtitle}>
-                              {p.rol === 'genel-mudur' ? 'İşletme Sahibi' : p.rol === 'calisan' ? 'Çalışan' : 'Bireysel'}
-                            </ThemedText>
-                          </View>
-                        </TouchableOpacity>
-
-                        <View style={styles.profileItemActions}>
-                          <TouchableOpacity
-                            onPress={() => handleToggleProfileActive(p)}
-                            style={styles.toggleActiveButton}
-                          >
-                            {p.aktif ? (
-                              <ToggleRight size={24} color="#10B981" />
-                            ) : (
-                              <ToggleLeft size={24} color="#94A3B8" />
-                            )}
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    );
-                  })}
-                </ScrollView>
-
-                <TouchableOpacity
-                  onPress={() => setCreateMode('choose')}
-                  style={styles.addProfileButton}
-                >
-                  <Plus size={16} color="#fff" style={{ marginRight: 6 }} />
-                  <ThemedText style={styles.addProfileButtonText}>Yeni Profil Ekle</ThemedText>
-                </TouchableOpacity>
-              </>
-            ) : createMode === 'choose' ? (
-              <View style={styles.chooseContainer}>
-                <ThemedText style={styles.chooseLabel}>Hangi tür profil eklemek istersiniz?</ThemedText>
-                
-                <TouchableOpacity
-                  onPress={() => setCreateMode('individual')}
-                  style={styles.chooseOption}
-                >
-                  <User size={20} color="#818CF8" />
-                  <View style={{ marginLeft: 12 }}>
-                    <ThemedText style={styles.chooseOptionTitle}>Bireysel Profil</ThemedText>
-                    <ThemedText style={styles.chooseOptionDesc}>Kendi çalışma saatlerinizi takip etmek için.</ThemedText>
-                  </View>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={() => setCreateMode('employee')}
-                  style={styles.chooseOption}
-                >
-                  <Users size={20} color="#34D399" />
-                  <View style={{ marginLeft: 12 }}>
-                    <ThemedText style={styles.chooseOptionTitle}>Çalışan Profili</ThemedText>
-                    <ThemedText style={styles.chooseOptionDesc}>Bir işletmenin kodunu girerek ekibe dahil olmak için.</ThemedText>
-                  </View>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={() => setCreateMode('business')}
-                  style={styles.chooseOption}
-                >
-                  <Briefcase size={20} color="#F59E0B" />
-                  <View style={{ marginLeft: 12 }}>
-                    <ThemedText style={styles.chooseOptionTitle}>İşletme Sahibi Profili</ThemedText>
-                    <ThemedText style={styles.chooseOptionDesc}>Kendi ekibinizi kurmak ve yönetmek için.</ThemedText>
-                  </View>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={() => setCreateMode(null)}
-                  style={styles.backButton}
-                >
-                  <ThemedText style={styles.backButtonText}>Geri Dön</ThemedText>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <View style={styles.formContainer}>
-                {createMode === 'individual' && (
-                  <>
-                    <ThemedText style={styles.formLabel}>Profil Başlığı</ThemedText>
-                    <TextInput
-                      style={styles.formInput}
-                      placeholder="Örn: Kişisel Takip / Freelance A"
-                      placeholderTextColor="#64748B"
-                      value={newProfileTitle}
-                      onChangeText={setNewProfileTitle}
-                    />
-                    <TouchableOpacity
-                      onPress={() => handleCreateProfile('individual', newProfileTitle)}
-                      style={styles.saveProfileBtn}
-                    >
-                      <ThemedText style={styles.saveProfileBtnText}>Profil Oluştur</ThemedText>
-                    </TouchableOpacity>
-                  </>
-                )}
-
-                {createMode === 'employee' && (
-                  <>
-                    <ThemedText style={styles.formLabel}>Profil Başlığı (İsminiz)</ThemedText>
-                    <TextInput
-                      style={styles.formInput}
-                      placeholder="Örn: Ali Yılmaz"
-                      placeholderTextColor="#64748B"
-                      value={newProfileTitle}
-                      onChangeText={setNewProfileTitle}
-                    />
-                    <ThemedText style={styles.formLabel}>Katılım Kodu (Join Code)</ThemedText>
-                    <TextInput
-                      style={styles.formInput}
-                      placeholder="Örn: NP-XXXX"
-                      placeholderTextColor="#64748B"
-                      value={newProfileCode}
-                      onChangeText={setNewProfileCode}
-                      autoCapitalize="characters"
-                    />
-                    <TouchableOpacity
-                      onPress={() => handleCreateProfile('employee', newProfileTitle, newProfileCode)}
-                      style={styles.saveProfileBtn}
-                    >
-                      <ThemedText style={styles.saveProfileBtnText}>Koda Katıl</ThemedText>
-                    </TouchableOpacity>
-                  </>
-                )}
-
-                {createMode === 'business' && (
-                  <>
-                    <ThemedText style={styles.formLabel}>İşletme / Restoran Adı</ThemedText>
-                    <TextInput
-                      style={styles.formInput}
-                      placeholder="Örn: Big Chef Burgers"
-                      placeholderTextColor="#64748B"
-                      value={newProfileBizName}
-                      onChangeText={setNewProfileBizName}
-                    />
-                    <TouchableOpacity
-                      onPress={() => handleCreateProfile('business', '', undefined, newProfileBizName)}
-                      style={styles.saveProfileBtn}
-                    >
-                      <ThemedText style={styles.saveProfileBtnText}>İşletme Kur</ThemedText>
-                    </TouchableOpacity>
-                  </>
-                )}
-
-                <TouchableOpacity
-                  onPress={() => {
-                    setCreateMode('choose');
-                    setNewProfileTitle('');
-                    setNewProfileCode('');
-                    setNewProfileBizName('');
-                  }}
-                  style={styles.backButton}
-                >
-                  <ThemedText style={styles.backButtonText}>Geri Dön</ThemedText>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-        </View>
-      </Modal>
 
       {/* Upcoming Shifts List for Employee */}
       {self && self.rol === 'calisan' && (

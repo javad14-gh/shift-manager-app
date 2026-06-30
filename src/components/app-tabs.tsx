@@ -83,6 +83,27 @@ export default function AppTabs() {
           ),
         }}
       />
+      <Tabs.Screen
+        name="profiles"
+        options={{
+          title: 'Profiller',
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="profile-settings"
+        options={{
+          title: 'Profil Ayarları',
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="profile-reports"
+        options={{
+          title: 'Profil Raporları',
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }
